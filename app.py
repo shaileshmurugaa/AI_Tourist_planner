@@ -14,6 +14,7 @@ kmeans_model = joblib.load('kmeans_model.pkl')
 scaler = joblib.load('scaler.pkl')
 random_forest_model = joblib.load('random_forest_model.pkl')
 xgboost_model = joblib.load('xgboost_model.pkl')
+from rules import apply_travel_rules
 
 # Expected feature columns
 expected_feature_columns = random_forest_model.feature_names_in_
