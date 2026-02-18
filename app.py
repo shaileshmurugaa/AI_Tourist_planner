@@ -5,6 +5,9 @@ import numpy as np
 import os
 
 app = Flask(__name__)
+@app.route("/")
+def home():
+    return "API Running!"
 
 # Load models
 kmeans_model = joblib.load('kmeans_model.pkl')
