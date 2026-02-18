@@ -1,113 +1,71 @@
-from flask import Flask, request, jsonify
-import joblib
-import pandas as pd
-import numpy as np
 import os
+import joblib
+import numpy as np
+from flask import Flask, request, jsonify
 
+# Initialize Flask App
 app = Flask(__name__)
+
+# ------------------------------
+# Load Hybrid Models
+# ------------------------------
+rf_model = joblib.load("random_forest_model.pkl")
+xgb_model = joblib.load("xgboost_model.pkl")
+kmeans_model = joblib.load("kmeans_model.pkl")
+rule_engine = joblib.load("rule_engine.pkl")
+
+print("✅ Models loaded successfully")
+
+# ------------------------------
+# Home Route
+# ------------------------------
 @app.route("/")
 def home():
-    return "API Running!"
+    return "🌍 AI Tourist Planner API is Running!"
 
-# Load models
-kmeans_model = joblib.load('kmeans_model.pkl')
-scaler = joblib.load('scaler.pkl')
-random_forest_model = joblib.load('random_forest_model.pkl')
-xgboost_model = joblib.load('xgboost_model.pkl')
-from rules import apply_travel_rules
-
-# Expected feature columns
-expected_feature_columns = random_forest_model.feature_names_in_
-
-# Home route (for Render health check)
-@app.route('/')
-def home():
-    return "AI Climate-Smart Tourist Planner API is running!"
-
-# Preprocessing function
-def preprocess_data(data):
-    df_new = pd.DataFrame([data])
-
-    # Convert dates
-    if 'Start date' in df_new.columns:
-        df_new['Start date'] = pd.to_datetime(df_new['Start date'])
-        df_new['Travel_Month'] = df_new['Start date'].dt.month
-    elif 'Travel_Month' not in df_new.columns:
-        df_new['Travel_Month'] = 1
-
-    df_initial = pd.DataFrame([data])
-    df_initial['Start date'] = pd.to_datetime(df_initial['Start date'])
-    df_initial['End date'] = pd.to_datetime(df_initial['End date'])
-    df_initial['Travel_Month'] = df_initial['Start date'].dt.month
-
-    df_initial = df_initial.drop(columns=['Start date', 'End date', 'Trip ID', 'Traveler name'], errors='ignore')
-
-    categorical_cols = [
-        'Destination',
-        'Traveler gender',
-        'Traveler nationality',
-        'Accommodation type',
-        'Transportation type'
-    ]
-
-    for col in categorical_cols:
-        if col not in df_initial.columns:
-            df_initial[col] = np.nan
-
-    df_ohe = pd.get_dummies(df_initial, columns=categorical_cols, drop_first=True)
-
-    # KMeans input
-    kmeans_features = scaler.feature_names_in_
-    template = pd.DataFrame(columns=kmeans_features)
-
-    df_kmeans = pd.concat([template, df_ohe], ignore_index=True, sort=False).fillna(0)
-    df_kmeans = df_kmeans[kmeans_features]
-
-    X_scaled = scaler.transform(df_kmeans)
-    cluster_label = kmeans_model.predict(X_scaled)[0]
-
-    cluster_df = pd.DataFrame(0, index=[0], columns=['Cluster_0', 'Cluster_1', 'Cluster_2', 'Cluster_3'])
-    cluster_df[f'Cluster_{cluster_label}'] = 1
-
-    original_cols = [col for col in expected_feature_columns if not col.startswith('Cluster_')]
-    template_orig = pd.DataFrame(columns=original_cols)
-
-    df_all = pd.concat([template_orig, df_ohe], ignore_index=True, sort=False).fillna(0)
-    df_all = df_all[original_cols]
-
-    for col in cluster_df.columns:
-        df_all[col] = cluster_df[col].iloc[0]
-
-    final_df = df_all[expected_feature_columns]
-
-    return final_df, df_new.iloc[0]
-
-# Prediction route
-@app.route('/predict', methods=['POST'])
+# ------------------------------
+# Prediction Route
+# ------------------------------
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
 
-        processed_data, original_row = preprocess_data(data)
+        # Example expected inputs
+        temperature = float(data["temperature"])
+        rainfall = float(data["rainfall"])
+        humidity = float(data["humidity"])
+        air_quality = float(data["air_quality"])
+        budget = float(data["budget"])
 
-        rf_pred = random_forest_model.predict(processed_data)[0]
-        xgb_pred = xgboost_model.predict(processed_data)[0]
+        # Prepare input for ML models
+        features = np.array([[temperature, rainfall, humidity, air_quality, budget]])
 
-        final_pred = apply_travel_rules(original_row, rf_pred, xgb_pred)
+        # Model Predictions
+        rf_pred = rf_model.predict(features)[0]
+        xgb_pred = xgb_model.predict(features)[0]
+        cluster = kmeans_model.predict(features)[0]
 
-        return jsonify({
-            'random_forest_prediction': float(rf_pred),
-            'xgboost_prediction': float(xgb_pred),
-            'final_adjusted_prediction': float(final_pred)
-        })
+        # Hybrid Decision Logic
+        hybrid_score = (rf_pred + xgb_pred) / 2
+
+        # Rule Engine Suggestion
+        suggestion = rule_engine.get(cluster, "General Travel")
+
+        result = {
+            "hybrid_score": round(float(hybrid_score), 2),
+            "cluster": int(cluster),
+            "recommendation": suggestion
+        }
+
+        return jsonify(result)
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)})
 
-# Run server
-
+# ------------------------------
+# Run App (Render Compatible)
+# ------------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
