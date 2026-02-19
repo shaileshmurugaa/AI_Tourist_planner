@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>ClimateVoyage AI</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: white;
+        }
+
+        header {
+            text-align: center;
+            padding: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        #map {
+            height: 350px;
+            border-radius: 20px;
+            margin: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(12px);
+            border-radius: 20px;
+            padding: 25px;
+            margin: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        input,
+        select {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 12px;
+            border: none;
+            outline: none;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 15px;
+            border-radius: 12px;
+            border: none;
+            background: #00c853;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        button:hover {
+            background: #00e676;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 15px;
+        }
+
+        .good {
+            color: #00ff95;
+        }
+
+        .moderate {
+            color: #ffc107;
+        }
+
+        .bad {
+            color: #ff5252;
+        }
+
+        footer {
+            text-align: center;
+            padding: 15px;
+            font-size: 14px;
+            opacity: 0.7;
+        }
+
+        input,
+        select {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-weight: 500;
+        }
+
+        input:focus,
+        select:focus {
+            box-shadow: 0 0 12px #00ff95;
+            transform: scale(1.02);
+            transition: 0.3s;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>🌍 ClimateVoyage AI</header>
+
+    <div id="map"></div>
+    <div class="card">
+
+        <label>Your Location</label>
+        <input type="text" id="yourLocation" placeholder="Enter your city">
+
+        <label>Destination City</label>
+        <input type="text" id="destination" placeholder="Enter destination city">
+
+        <label>Journey Date</label>
+        <input type="date" id="journeyDate">
+
+        <label>Climate Priority</label>
+        <select id="priority">
+            <option value="1">Low</option>
+            <option value="2">Balanced</option>
+            <option value="3">High</option>
+        </select>
+
+
+        <button onclick="generatePlan()">Generate Smart Plan</button>
+
+        <div class="result" id="output"></div>
+
+    </div>
+
+
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+
+        // Set minimum date to today
+        let today = new Date().toISOString().split("T")[0];
+        document.getElementById("journeyDate").setAttribute("min", today);
+
+        // Initialize Map
+        let fromMarker;
+        let toMarker;
+        let routeLine;
+        var map = L.map('map').setView([20.5937, 78.9629], 5);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+
+        // Generate Plan
+
+
+        async function generatePlan() {
+            let journeyDate = document.getElementById("journeyDate").value;
+
+            if (!journeyDate) {
+                alert("Please select a journey date!");
+                return;
+            }
+
+
+            let fromCity = document.getElementById("yourLocation").value;
+            let toCity = document.getElementById("destination").value;
+            let priority = parseInt(document.getElementById("priority").value);
+
+            if (!fromCity || !toCity) {
+                alert("Please enter both locations!");
+                return;
+            }
+
+            // Geocode FROM location
+            let geoFrom = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${fromCity}&limit=1`);
+            let dataFrom = await geoFrom.json();
+            if (dataFrom.length === 0) { alert("Your location not found!"); return; }
+
+            let fromLat = parseFloat(dataFrom[0].lat);
+            let fromLon = parseFloat(dataFrom[0].lon);
+
+            // Geocode TO location
+            let geoTo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${toCity}&limit=1`);
+            let dataTo = await geoTo.json();
+            if (dataTo.length === 0) { alert("Destination not found!"); return; }
+
+            let toLat = parseFloat(dataTo[0].lat);
+            let toLon = parseFloat(dataTo[0].lon);
+
+            // Remove previous markers & route if they exist
+            if (fromMarker) map.removeLayer(fromMarker);
+            if (toMarker) map.removeLayer(toMarker);
+            if (routeLine) map.removeLayer(routeLine);
+
+            // Add new markers
+            fromMarker = L.marker([fromLat, fromLon])
+                .addTo(map)
+                .bindPopup("📍 " + fromCity);
+
+            toMarker = L.marker([toLat, toLon])
+                .addTo(map)
+                .bindPopup("📍 " + toCity);
+
+            // Get road route from OSRM FIRST
+            let routeResponse = await fetch(
+                `https://router.project-osrm.org/route/v1/driving/${fromLon},${fromLat};${toLon},${toLat}?overview=full&geometries=geojson`
+            );
+
+            let routeData = await routeResponse.json();
+
+            if (routeData.code !== "Ok") {
+                alert("Route not found!");
+                return;
+            }
+
+            // Remove previous route if exists
+            if (routeLine) map.removeLayer(routeLine);
+
+            // Draw actual road path
+            routeLine = L.geoJSON(routeData.routes[0].geometry, {
+                style: { color: '#00ff95', weight: 5 }
+            }).addTo(map);
+
+            // Fit map view
+            map.fitBounds(routeLine.getBounds());
+            // Fetch nearby restaurants (2km radius)
+
+
+            // Road distance in KM
+            let distance = routeData.routes[0].distance / 1000;
+
+            // Road duration in minutes
+            let duration = routeData.routes[0].duration / 60;
+
+
+            // Carbon estimate
+            let emissionFactor = 0.08;
+            let carbon = distance * emissionFactor;
+
+            // Sustainability score
+            let score = 100 - (carbon * priority);
+            if (score < 0) score = 0;
+
+            let ratingClass = "good";
+            let ratingText = "Climate Friendly 🌱";
+
+            if (score < 80 && score >= 50) {
+                ratingClass = "moderate";
+                ratingText = "Moderate Impact ⚖";
+            }
+            if (score < 50) {
+                ratingClass = "bad";
+                ratingText = "High Impact 🔥";
+            }
+
+            // Weather for destination
+            // Fetch forecast for selected journey date
+            let weatherResponse = await fetch(
+                `https://api.open-meteo.com/v1/forecast?latitude=${toLat}&longitude=${toLon}&daily=temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_probability_max&timezone=auto`
+            );
+
+
+            let weatherData = await weatherResponse.json();
+
+            let tempMin = "N/A";
+            let tempMax = "N/A";
+            let windSpeed = "N/A";
+            let rainProb = "N/A";
+
+            if (weatherData.daily && weatherData.daily.time && weatherData.daily.time.includes(journeyDate)) {
+
+                let dateIndex = weatherData.daily.time.indexOf(journeyDate);
+
+                tempMax = weatherData.daily.temperature_2m_max[dateIndex];
+                tempMin = weatherData.daily.temperature_2m_min[dateIndex];
+                windSpeed = weatherData.daily.windspeed_10m_max[dateIndex];
+                rainProb = weatherData.daily.precipitation_probability_max[dateIndex];
+
+            }
+
+            else {
+                console.log("Forecast not available for selected future date.");
+            }
+
+            let heatwaveWarning = "";
+            let stormWarning = "";
+            let rainWarning = "";
+
+            if (tempMax !== "N/A" && tempMax > 38) {
+                heatwaveWarning = "🔥 Heatwave Risk: High temperature expected.";
+            }
+
+            if (windSpeed !== "N/A" && windSpeed > 40) {
+                stormWarning = "🌪 Storm Risk: Strong winds expected.";
+            }
+
+            if (rainProb !== "N/A" && rainProb > 60) {
+                rainWarning = "🌧 Heavy Rain Probability: High chance of rainfall.";
+            }
+           
+            // Output
+            document.getElementById("output").innerHTML = `
+<h3>📊 Smart Travel Analysis</h3>
+<p>🛣 Road Distance: ${distance.toFixed(2)} km</p>
+<p>⏱ Estimated Travel Time: ${duration.toFixed(0)} mins</p>
+<p>🌡 Temperature: ${tempMin}°C - ${tempMax}°C</p>
+<p>💨 Wind Speed: ${windSpeed} km/h</p>
+<p>🌧 Rain Probability: ${rainProb}%</p>
+<p>🌍 Estimated Carbon: ${carbon.toFixed(2)} kg CO₂</p>
+<p>🌱 Sustainability Score: <span class="${ratingClass}">${score.toFixed(0)}/100</span></p>
+<p>${ratingText}</p>
+
+<hr style="opacity:0.3;">
+
+<p style="color:#ff5252;">${heatwaveWarning}</p>
+<p style="color:#ff9800;">${stormWarning}</p>
+<p style="color:#29b6f6;">${rainWarning}</p>
+`;
+
+        }
+
+    </script>
+
+</body>
+
+</html>
